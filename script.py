@@ -7,7 +7,10 @@ import path
 import re
 from typing import List, Optional
 from dataclasses import dataclass
+import logging
 
+
+logger = logging.getLogger()
 
 @dataclass
 class Time:
@@ -25,6 +28,10 @@ class Time:
 
     def __str__(self) -> str:
         return f"{self.hr:02}.{self.min:02}.{self.sec:02}.{self.msec:04}"
+
+    def to_text(self) -> str:
+        """To youtube chapter text"""
+        return f"{self.hr:02}:{self.min:02}:{self.sec:02}"
 
     def to_msec(self) -> int:
         hr = self.hr*3600
@@ -60,6 +67,19 @@ class Chapter:
     length: Time
     cut: Optional[Cut]
 
+    def to_text(self, start: int):
+        """
+        Produce youtube chapter text
+        Args:
+        start: int
+            start time in msec, the end time of the previous chapter
+        """
+        start = Time().from_sec(float(start/1000))
+        cut = "" if self.cut is None else " "+str(self.cut)
+        s = f"{start.to_text()} {self.date}-{self.time}{cut}\n"
+        return s
+
+
     def to_meta(self, start: int):
         """
         Produce ffmpeg chapter metadata
@@ -84,6 +104,41 @@ class Clip:
     ch: Chapter
 
 
+class Clips:
+    def __init__(self, clips: List[Clip]):
+        self.clips = clips
+
+    def accum(self):
+        """Accumulate start time of each chapters in msec"""
+        lengths = [clip.ch.length.to_msec() for clip in self.clips]
+        starts = [0]
+        for i in lengths:
+            starts.append(starts[-1] + i)
+        return starts
+
+    def title(self) -> str:
+        title = (f"{self.clips[0].ch.name} "
+            f"{self.clips[0].ch.date}-{self.clips[0].ch.time} "
+            f"{self.clips[-1].ch.date}-{self.clips[-1].ch.time}"
+        )
+        return title
+
+    def meta(self) -> List[str]:
+        starts = self.accum()
+        meta = [
+            clip.ch.to_meta(start) for clip, start in zip(self.clips, starts)]
+        return meta
+
+    def text(self) -> List[str]:
+        starts = self.accum()
+        text = [
+            clip.ch.to_text(start) for clip, start in zip(self.clips, starts)]
+        return text 
+
+    def __iter__(self):
+        for c in self.clips:
+            yield c
+
 class Splicer:
     """
     Parse file name produced by shadowplayer recording and lossless cut
@@ -105,8 +160,10 @@ class Splicer:
         files = [f for f in files if re.match(r".*\.mp4$", str(f))]
         return files
 
-    def clips(self):
-        return [self.parse(file) for file in self.files()]
+    def clips(self, files: List[str]) -> Clips:
+        clips = [self.parse(file) for file in files]
+        clips = [clip for clip in clips if clip is not None]
+        return Clips(clips)
 
     def basic_pattern(self) -> str:
         """Return basic pattern strings"""
@@ -133,13 +190,18 @@ class Splicer:
             cut = Cut(start=Time(*start), end=Time(*end))
         return cut
 
-    def parse(self, file: path.Path) -> Clip:
+    def parse(self, file: path.Path) -> Optional[Clip]:
         """Parse file name to Clip"""
         # discard first element which is an empty string
         probe = ffmpeg.probe(file)
-        name, date, time, filetype, rest = (
-            re.split(self.basic_pattern(), str(file.basename()))[1:]
-        )
+        try:
+            name, date, time, filetype, rest = (
+                re.split(self.basic_pattern(), str(file.basename()))[1:]
+            )
+        except ValueError:
+            logger.warning(f"{file} is not a match")
+            return None
+
         # length is in sec
         length: float = float(probe["format"]["duration"])
         chapter = Chapter(
@@ -152,33 +214,27 @@ class Splicer:
         clip = Clip(path=file, probe=probe,ch=chapter)
         return clip 
 
-    def chapter_meta(self, clips: List[Clip]) -> List[str]:
-        lengths = [clip.ch.length.to_msec() for clip in clips]
-        starts = [0]
-        for i in lengths:
-            starts.append(starts[-1] + i)
-        meta = [clip.ch.to_meta(start) for clip, start in zip(clips, starts)]
-        return meta
-
-    def title(self, clips: List[Clip]) -> str:
-        title = (f"{clips[0].ch.name} "
-            f"{clips[0].ch.date}-{clips[0].ch.time} "
-            f"{clips[-1].ch.date}-{clips[-1].ch.time}"
-        )
-        return title
-
-    def output_meta(self, clips: List[Clip]) -> path.Path:
-        title = self.title(clips)
+    def output_meta(self, clips: Clips) -> path.Path:
+        title = clips.title()
         path = self.out_dir.joinpath(f"{title}.ffmetadata")
         with open(path, 'w') as file:
             file.write(";FFMETADATA1\n")
             file.write(f"title={title}\n")
-            meta = self.chapter_meta(clips)
+            meta = clips.meta()
             file.write("".join(meta))
         return path
 
-    def concat(self, clips: List[Clip]):
-        title = self.title(clips)
+    def output_text(self, clips: Clips) -> path.Path:
+        title = clips.title()
+        path = self.out_dir.joinpath(f"{title}.txt")
+        with open(path, 'w') as file:
+            file.write(f"{title}\n")
+            text = clips.text()
+            file.write("".join(text))
+        return path
+
+    def concat(self, clips: Clips):
+        title = clips.title()
         meta_path = self.output_meta(clips)
         path = self.out_dir.joinpath(f"{title}.mp4")
         meta = ffmpeg.input(meta_path)
@@ -204,7 +260,19 @@ def concat():
 
 
 if __name__ == "__main__":
-    splice = Splicer("/mnt/i/capture_temp/Dark Souls II")
+    import argparse
+    parser = argparse.ArgumentParser(
+        prog="VideoConcat",
+        description=(
+            "Produce chapter metadata/text from video names produced "
+            "combination of shadowplay and losslesscut",
+        ),
+    )
+    parser.add_argument("-b", "--base", action="store")
+    args = parser.parse_args()
+
+    splice = Splicer(args.base)
     files = splice.files()
-    clips = splice.clips()
-    meta = splice.chapter_meta(clips)
+    clips = splice.clips(files)
+    meta = Clips(clips).meta()
+    text = Clips(clips).text()
