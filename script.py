@@ -170,7 +170,7 @@ class Splicer:
         name = r"(.*)"
         date = r"(\d{4}\.\d{2}\.\d{2})"
         time = r"(\d{2}\.\d{2}\.\d{2}\.\d{3})"
-        filetype = r"(\.DVR\.mp4)"
+        filetype = r"(\.DVR(\.mp4)?)"
         return fr"{name} {date} - {time}{filetype}"
 
     def cut_pattern(self) -> str:
@@ -195,7 +195,7 @@ class Splicer:
         # discard first element which is an empty string
         probe = ffmpeg.probe(file)
         try:
-            name, date, time, filetype, rest = (
+            name, date, time, DVR, mp4, rest = (
                 re.split(self.basic_pattern(), str(file.basename()))[1:]
             )
         except ValueError:
