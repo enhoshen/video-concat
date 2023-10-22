@@ -3,9 +3,9 @@
 # En-Ho Shen <enhoshen@gmail.com>, 2023
 
 import ffmpeg
-import os
+import path
 import re
-import datetime
+from typing import List, Optional
 from dataclasses import dataclass
 
 
@@ -15,6 +15,13 @@ class Time:
     min: int=0
     sec: int=0
     msec: int=0
+
+    def __post_init__(self):
+        """support for init with str"""
+        self.hr = int(self.hr)
+        self.min = int(self.min)
+        self.sec = int(self.sec)
+        self.msec = int(self.msec)
 
     def __str__(self) -> str:
         return f"{self.hr:02}.{self.min:02}.{self.sec:02}.{self.msec:04}"
@@ -37,23 +44,69 @@ class Time:
 
 
 @dataclass
+class Cut:
+    start: Time
+    end: Time
+
+    def __str__(self):
+        return f"{self.start}-{self.end}"
+
+
+@dataclass
 class Chapter:
     name: str
     date: str
     time: str 
     length: Time
+    cut: Optional[Cut]
+
+    def to_meta(self, start: int):
+        """
+        Produce ffmpeg chapter metadata
+        Args:
+        start: int
+            start time in msec, the end time of the previous chapter
+        """
+        end = start + self.length.to_msec()
+        cut = "" if self.cut is None else " "+str(self.cut)
+        s = ("[CHAPTER]\n"
+            f"TIMEBASE=1/1000\n"
+            f"START={start}\n"
+            f"END={end}\n"
+            f"title={self.date}-{self.time}{cut}\n"
+        )
+        return s
+
+@dataclass
+class Clip:
+    path: path.Path
     probe: dict
+    ch: Chapter
 
 
 class Splicer:
-    def __init__(self):
-        pass
+    """
+    Parse file name produced by shadowplayer recording and lossless cut
+    program, and probe dictionary from ffmpeg.probe(), convert to struct
+    and output concated video with updated metadate containing chapter
+    information
+    """
+    def __init__(self, base:str="./", out_dir=None):
+        self.base = path.Path(base)
+        self.out_dir = ( self.base.joinpath("output")
+            if out_dir is None else path.Path(out_dir))
+        try:
+            self.out_dir.mkdir(mode=711)
+        except FileExistsError:
+            pass
 
-    def init(self):
-        base = "./"
-        files = os.listdir(base)
-        files = [f for f in files if re.match(r".*\.mp4$", f)]
+    def files(self):
+        files = self.base.listdir()
+        files = [f for f in files if re.match(r".*\.mp4$", str(f))]
         return files
+
+    def clips(self):
+        return [self.parse(file) for file in self.files()]
 
     def basic_pattern(self) -> str:
         """Return basic pattern strings"""
@@ -71,12 +124,21 @@ class Splicer:
     def time_pattern(self) -> str:
         return r"(\d{2})\.(\d{2})\.(\d{2})\.(\d{3})"
 
-    def parse(self, name: str) -> Chapter:
-        """Parse file name to Chapter"""
+    def parse_cut(self, s: str) -> Optional[Cut]:
+        cut = None
+        if s != "":
+            start, end, *_= re.split(self.cut_pattern(), s)[1:]
+            _, *start, _ = re.split(self.time_pattern(), start)
+            _, *end, _ = re.split(self.time_pattern(), end)
+            cut = Cut(start=Time(*start), end=Time(*end))
+        return cut
+
+    def parse(self, file: path.Path) -> Clip:
+        """Parse file name to Clip"""
         # discard first element which is an empty string
-        probe = ffmpeg.probe(name)
+        probe = ffmpeg.probe(file)
         name, date, time, filetype, rest = (
-            re.split(self.basic_pattern(), name)[1:]
+            re.split(self.basic_pattern(), str(file.basename()))[1:]
         )
         # length is in sec
         length: float = float(probe["format"]["duration"])
@@ -85,9 +147,52 @@ class Splicer:
             date=date,
             time=time,
             length=Time().from_sec(length),
-            probe=probe,
+            cut = self.parse_cut(rest)
         )
-        return chapter
+        clip = Clip(path=file, probe=probe,ch=chapter)
+        return clip 
+
+    def chapter_meta(self, clips: List[Clip]) -> List[str]:
+        lengths = [clip.ch.length.to_msec() for clip in clips]
+        starts = [0]
+        for i in lengths:
+            starts.append(starts[-1] + i)
+        meta = [clip.ch.to_meta(start) for clip, start in zip(clips, starts)]
+        return meta
+
+    def title(self, clips: List[Clip]) -> str:
+        title = (f"{clips[0].ch.name} "
+            f"{clips[0].ch.date}-{clips[0].ch.time} "
+            f"{clips[-1].ch.date}-{clips[-1].ch.time}"
+        )
+        return title
+
+    def output_meta(self, clips: List[Clip]) -> path.Path:
+        title = self.title(clips)
+        path = self.out_dir.joinpath(f"{title}.ffmetadata")
+        with open(path, 'w') as file:
+            file.write(";FFMETADATA1\n")
+            file.write(f"title={title}\n")
+            meta = self.chapter_meta(clips)
+            file.write("".join(meta))
+        return path
+
+    def concat(self, clips: List[Clip]):
+        title = self.title(clips)
+        meta_path = self.output_meta(clips)
+        path = self.out_dir.joinpath(f"{title}.mp4")
+        meta = ffmpeg.input(meta_path)
+        streams = [ffmpeg.input(c.path) for c in clips]
+        #kwargs = {
+        #    "i": f" \"{meta_path}\"",
+        #    "map_metadata": "-1", 
+        #}
+        return (ffmpeg.concat(*streams)
+            .output(
+                path,
+                #**kwargs,
+            )
+        )
 
 
 class Test:
@@ -99,7 +204,7 @@ def concat():
 
 
 if __name__ == "__main__":
-    splice = Splicer()
-    files = splice.init()
-    ch = splice.parse(files[0])
-
+    splice = Splicer("/mnt/i/capture_temp/Dark Souls II")
+    files = splice.files()
+    clips = splice.clips()
+    meta = splice.chapter_meta(clips)
