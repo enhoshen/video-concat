@@ -8,6 +8,7 @@ import re
 from typing import List, Optional
 from dataclasses import dataclass
 import logging
+import subprocess
 
 
 logger = logging.getLogger()
@@ -116,6 +117,7 @@ class Clips:
             starts.append(starts[-1] + i)
         return starts
 
+    @property
     def title(self) -> str:
         title = (f"{self.clips[0].ch.name} "
             f"{self.clips[0].ch.date}-{self.clips[0].ch.time} "
@@ -139,28 +141,19 @@ class Clips:
         for c in self.clips:
             yield c
 
-class Splicer:
+class Parser:
     """
     Parse file name produced by shadowplayer recording and lossless cut
     program, and probe dictionary from ffmpeg.probe(), convert to struct
     and output concated video with updated metadate containing chapter
     information
     """
-    def __init__(self, base:str="./", out_dir=None):
-        self.base = path.Path(base)
-        self.out_dir = ( self.base.joinpath("output")
-            if out_dir is None else path.Path(out_dir))
-        try:
-            self.out_dir.mkdir(mode=711)
-        except FileExistsError:
-            pass
-
-    def files(self):
-        files = self.base.listdir()
-        files = [f for f in files if re.match(r".*\.mp4$", str(f))]
+    def files(self, base: path.Path):
+        files = base.listdir()
+        files = [path.Path(f) for f in files if re.match(r".*\.mp4$", str(f))]
         return files
 
-    def clips(self, files: List[str]) -> Clips:
+    def clips(self, files: List[path.Path]) -> Clips:
         clips = [self.parse(file) for file in files]
         clips = [clip for clip in clips if clip is not None]
         return Clips(clips)
@@ -214,49 +207,79 @@ class Splicer:
         clip = Clip(path=file, probe=probe,ch=chapter)
         return clip 
 
-    def output_meta(self, clips: Clips) -> path.Path:
-        title = clips.title()
-        path = self.out_dir.joinpath(f"{title}.ffmetadata")
-        with open(path, 'w') as file:
-            file.write(";FFMETADATA1\n")
-            file.write(f"title={title}\n")
-            meta = clips.meta()
+
+class Output:
+    def __init__(self, clips: Clips, base:str="./", out_dir=None):
+        self.clips = clips
+        self.base = path.Path(base)
+        self.out_dir = self.base if out_dir is None else path.Path(out_dir)
+        self.out_dir = self.out_dir.joinpath(self.clips.title)
+        self.meta_path = self.out_dir.joinpath("chapter.ffmetadata")
+        self.text_path = self.out_dir.joinpath("chapter.txt")
+        self.script_path = self.out_dir.joinpath(f"script.txt")
+        try:
+            self.out_dir.mkdir(mode=711)
+        except FileExistsError:
+            pass
+
+    def meta(self) -> None:
+        with open(self.meta_path, 'w') as file:
+            file.write(f"title={self.clips.title}\n")
+            meta = self.clips.meta()
             file.write("".join(meta))
-        return path
 
-    def output_text(self, clips: Clips) -> path.Path:
-        title = clips.title()
-        path = self.out_dir.joinpath(f"{title}.txt")
-        with open(path, 'w') as file:
-            file.write(f"{title}\n")
-            text = clips.text()
+    def text(self) -> None:
+        with open(self.text_path, 'w') as file:
+            file.write(f"{self.clips.title}\n")
+            text = self.clips.text()
             file.write("".join(text))
-        return path
 
-    def concat(self, clips: Clips):
-        title = clips.title()
-        meta_path = self.output_meta(clips)
-        path = self.out_dir.joinpath(f"{title}.mp4")
-        meta = ffmpeg.input(meta_path)
-        streams = [ffmpeg.input(c.path) for c in clips]
-        #kwargs = {
-        #    "i": f" \"{meta_path}\"",
-        #    "map_metadata": "-1", 
-        #}
-        return (ffmpeg.concat(*streams)
-            .output(
-                path,
-                #**kwargs,
-            )
+    @property
+    def concat(self) -> ffmpeg.nodes.OutputStream:
+        out = self.out_dir.joinpath(f"{self.clips.title}.mp4")
+        streams = [ffmpeg.input(c.path) for c in self.clips]
+        concat = (ffmpeg.concat(*streams)
+            .output(out)
         )
+        return concat
+    @property
+    def map_chapter(self) -> List[str]:
+        out_kwargs = [
+            "-map_metadata", "0", 
+            "-map_chapters", "-1", 
+            "-movflags", "use_metadata_tags", 
+            "-movflags", "+faststart", 
+            ]
+        meta_kwargs = [
+            "-f", "ffmetadata",
+            "-i", f"{self.meta_path}"
+        ]
+        cmd = self.concat.compile() 
+        cmd = cmd[:-3] + meta_kwargs + out_kwargs + cmd[-3:]
+        return cmd
+
+    def script(self):
+        with open(self.script_path, 'w') as file:
+            file.write(" ".join(self.concat.compile()))
+            file.write(" ".join(self.map_chapter))
+
+    def run(self):
+        return subprocess.Popen(self.map_chapter)
+
+    def move(self):
+        for c in self.clips:
+            c.path = c.path.move(self.out_dir.joinpath(c.path.basename()))
+
+    def project(self, move: bool=True):
+        self.meta()
+        self.text()
+        if move:
+            self.move()
+        self.script()
 
 
 class Test:
     pass
-
-
-def concat():
-    (ffmpeg.concat())
 
 
 if __name__ == "__main__":
@@ -269,10 +292,11 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument("-b", "--base", action="store")
+    parser.add_argument("-o", "--out_dir", action="store")
+    parser.add_argument("-m", "--move", action="store_true")
     args = parser.parse_args()
 
-    splice = Splicer(args.base)
-    files = splice.files()
-    clips = splice.clips(files)
-    meta = Clips(clips).meta()
-    text = Clips(clips).text()
+    parser = Parser()
+    files = parser.files(path.Path(args.base))
+    clips = parser.clips(files)
+    output = Output(clips, args.base, args.out_dir)
