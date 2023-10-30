@@ -242,6 +242,7 @@ class Output:
             .output(out)
         )
         return concat
+
     @property
     def map_chapter(self) -> List[str]:
         out_kwargs = [
@@ -260,8 +261,8 @@ class Output:
 
     def script(self):
         with open(self.script_path, 'w') as file:
-            file.write(" ".join(self.concat.compile()))
-            file.write(" ".join(self.map_chapter))
+            file.write(subprocess.list2cmdline(self.concat.compile()))
+            file.write(subprocess.list2cmdline(self.map_chapter))
 
     def run(self):
         return subprocess.Popen(self.map_chapter)
