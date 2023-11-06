@@ -26,9 +26,12 @@ class Time:
         self.min = int(self.min)
         self.sec = int(self.sec)
         self.msec = int(self.msec)
+        # if msec is 4 digits
+        if self.msec >= 1000:
+            self.msec = int(self.msec//10)
 
     def __str__(self) -> str:
-        return f"{self.hr:02}.{self.min:02}.{self.sec:02}.{self.msec:04}"
+        return f"{self.hr:02}.{self.min:02}.{self.sec:02}.{self.msec:0<4}"
 
     def to_text(self) -> str:
         """To youtube chapter text"""
@@ -107,6 +110,8 @@ class Clip:
 
 class Clips:
     def __init__(self, clips: List[Clip]):
+        if len(clips) <= 0:
+            logger.warning(f"no clip candidates")
         self.clips = clips
 
     def accum(self):
@@ -119,6 +124,8 @@ class Clips:
 
     @property
     def title(self) -> str:
+        if len(self.clips) <= 0:
+            return ""
         title = (f"{self.clips[0].ch.name} "
             f"{self.clips[0].ch.date}-{self.clips[0].ch.time} "
             f"{self.clips[-1].ch.date}-{self.clips[-1].ch.time}"
@@ -162,9 +169,10 @@ class Parser:
         """Return basic pattern strings"""
         name = r"(.*)"
         date = r"(\d{4}\.\d{2}\.\d{2})"
-        time = r"(\d{2}\.\d{2}\.\d{2}\.\d{3})"
+        time = r"(\d{2}\.\d{2}\.\d{2})"
+        index = r"(\.\d*)" 
         filetype = r"(\.DVR(\.mp4)?)"
-        return fr"{name} {date} - {time}{filetype}"
+        return fr"{name} {date} - {time}{index}{filetype}"
 
     def cut_pattern(self) -> str:
         start = r"(\d{2}\.\d{2}\.\d{2}\.\d{3})"
@@ -188,7 +196,7 @@ class Parser:
         # discard first element which is an empty string
         probe = ffmpeg.probe(file)
         try:
-            name, date, time, DVR, mp4, rest = (
+            name, date, time, index, DVR, mp4, rest = (
                 re.split(self.basic_pattern(), str(file.basename()))[1:]
             )
         except ValueError:
@@ -262,6 +270,7 @@ class Output:
     def script(self):
         with open(self.script_path, 'w') as file:
             file.write(subprocess.list2cmdline(self.concat.compile()))
+            file.write('\n')
             file.write(subprocess.list2cmdline(self.map_chapter))
 
     def run(self):
@@ -283,6 +292,14 @@ class Test:
     pass
 
 
+def read(args) -> Output:
+    parser = Parser()
+    files = parser.files(path.Path(args.base))
+    clips = parser.clips(files)
+    output = Output(clips, args.base, args.out_dir)
+    return output
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(
@@ -296,8 +313,4 @@ if __name__ == "__main__":
     parser.add_argument("-o", "--out_dir", action="store")
     parser.add_argument("-m", "--move", action="store_true")
     args = parser.parse_args()
-
-    parser = Parser()
-    files = parser.files(path.Path(args.base))
-    clips = parser.clips(files)
-    output = Output(clips, args.base, args.out_dir)
+    output = read(args)
