@@ -2,7 +2,6 @@
 # ---------------------------
 # En-Ho Shen <enhoshen@gmail.com>, 2023
 
-import ffmpeg
 import path
 import re
 from typing import List, Optional
@@ -10,15 +9,19 @@ from dataclasses import dataclass
 import logging
 import subprocess
 
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+import ffmpeg
+
 
 logger = logging.getLogger()
 
+
 @dataclass
 class Time:
-    hr: int=0
-    min: int=0
-    sec: int=0
-    msec: int=0
+    hr: int = 0
+    min: int = 0
+    sec: int = 0
+    msec: int = 0
 
     def __post_init__(self):
         """support for init with str"""
@@ -28,7 +31,7 @@ class Time:
         self.msec = int(self.msec)
         # if msec is 4 digits
         if self.msec >= 1000:
-            self.msec = int(self.msec//10)
+            self.msec = int(self.msec // 10)
 
     def __str__(self) -> str:
         return f"{self.hr:02}.{self.min:02}.{self.sec:02}.{self.msec:0<4}"
@@ -38,15 +41,15 @@ class Time:
         return f"{self.hr:02}:{self.min:02}:{self.sec:02}"
 
     def to_msec(self) -> int:
-        hr = self.hr*3600
-        min = self.min*60
+        hr = self.hr * 3600
+        min = self.min * 60
         sec = self.sec
         msec = self.msec
-        return ((hr+min+sec)*1000) + msec
+        return ((hr + min + sec) * 1000) + msec
 
     def from_sec(self, num: float):
         sec = int(num)
-        self.msec = int((num-sec)*1000)
+        self.msec = int((num - sec) * 1000)
         min = sec // 60
         self.sec = sec % 60
         self.hr = min // 60
@@ -67,7 +70,7 @@ class Cut:
 class Chapter:
     name: str
     date: str
-    time: str 
+    time: str
     length: Time
     cut: Optional[Cut]
 
@@ -78,11 +81,10 @@ class Chapter:
         start: int
             start time in msec, the end time of the previous chapter
         """
-        start = Time().from_sec(float(start/1000))
-        cut = "" if self.cut is None else " "+str(self.cut)
+        start = Time().from_sec(float(start / 1000))
+        cut = "" if self.cut is None else " " + str(self.cut)
         s = f"{start.to_text()} {self.date}-{self.time}{cut}\n"
         return s
-
 
     def to_meta(self, start: int):
         """
@@ -92,14 +94,16 @@ class Chapter:
             start time in msec, the end time of the previous chapter
         """
         end = start + self.length.to_msec()
-        cut = "" if self.cut is None else " "+str(self.cut)
-        s = ("[CHAPTER]\n"
+        cut = "" if self.cut is None else " " + str(self.cut)
+        s = (
+            "[CHAPTER]\n"
             f"TIMEBASE=1/1000\n"
             f"START={start}\n"
             f"END={end}\n"
             f"title={self.date}-{self.time}{cut}\n"
         )
         return s
+
 
 @dataclass
 class Clip:
@@ -126,7 +130,8 @@ class Clips:
     def title(self) -> str:
         if len(self.clips) <= 0:
             return ""
-        title = (f"{self.clips[0].ch.name} "
+        title = (
+            f"{self.clips[0].ch.name} "
             f"{self.clips[0].ch.date}-{self.clips[0].ch.time} "
             f"{self.clips[-1].ch.date}-{self.clips[-1].ch.time}"
         )
@@ -134,19 +139,18 @@ class Clips:
 
     def meta(self) -> List[str]:
         starts = self.accum()
-        meta = [
-            clip.ch.to_meta(start) for clip, start in zip(self.clips, starts)]
+        meta = [clip.ch.to_meta(start) for clip, start in zip(self.clips, starts)]
         return meta
 
     def text(self) -> List[str]:
         starts = self.accum()
-        text = [
-            clip.ch.to_text(start) for clip, start in zip(self.clips, starts)]
-        return text 
+        text = [clip.ch.to_text(start) for clip, start in zip(self.clips, starts)]
+        return text
 
     def __iter__(self):
         for c in self.clips:
             yield c
+
 
 class Parser:
     """
@@ -155,6 +159,7 @@ class Parser:
     and output concated video with updated metadate containing chapter
     information
     """
+
     def files(self, base: path.Path):
         files = base.listdir()
         files = [path.Path(f) for f in files if re.match(r".*\.mp4$", str(f))]
@@ -170,14 +175,14 @@ class Parser:
         name = r"(.*)"
         date = r"(\d{4}\.\d{2}\.\d{2})"
         time = r"(\d{2}\.\d{2}\.\d{2})"
-        index = r"(\.\d*)" 
+        index = r"(\.\d*)"
         filetype = r"(\.DVR(\.mp4)?)"
-        return fr"{name} {date} - {time}{index}{filetype}"
+        return rf"{name} {date} - {time}{index}{filetype}"
 
     def cut_pattern(self) -> str:
         start = r"(\d{2}\.\d{2}\.\d{2}\.\d{3})"
         end = r"(\d{2}\.\d{2}\.\d{2}\.\d{3})"
-        return fr"{start}-{end}"
+        return rf"{start}-{end}"
 
     def time_pattern(self) -> str:
         return r"(\d{2})\.(\d{2})\.(\d{2})\.(\d{3})"
@@ -185,7 +190,7 @@ class Parser:
     def parse_cut(self, s: str) -> Optional[Cut]:
         cut = None
         if s != "":
-            start, end, *_= re.split(self.cut_pattern(), s)[1:]
+            start, end, *_ = re.split(self.cut_pattern(), s)[1:]
             _, *start, _ = re.split(self.time_pattern(), start)
             _, *end, _ = re.split(self.time_pattern(), end)
             cut = Cut(start=Time(*start), end=Time(*end))
@@ -196,9 +201,9 @@ class Parser:
         # discard first element which is an empty string
         probe = ffmpeg.probe(file)
         try:
-            name, date, time, index, DVR, mp4, rest = (
-                re.split(self.basic_pattern(), str(file.basename()))[1:]
-            )
+            name, date, time, index, DVR, mp4, rest = re.split(
+                self.basic_pattern(), str(file.basename())
+            )[1:]
         except ValueError:
             logger.warning(f"{file} is not a match")
             return None
@@ -210,82 +215,87 @@ class Parser:
             date=date,
             time=time,
             length=Time().from_sec(length),
-            cut = self.parse_cut(rest)
+            cut=self.parse_cut(rest),
         )
-        clip = Clip(path=file, probe=probe,ch=chapter)
-        return clip 
+        clip = Clip(path=file, probe=probe, ch=chapter)
+        return clip
 
 
 class Output:
-    def __init__(self, clips: Clips, base:str="./", out_dir=None):
+    def __init__(
+        self,
+        clips: Clips,
+        base: str = "./",
+        out_dir=None,
+        template_path = None,
+    ):
         self.clips = clips
         self.base = path.Path(base)
+        self.template_path = (
+            "./" if template_path is None
+            else path.Path(template_path).dirname()
+        )
+        self.template_name = (
+            "ffmpeg_command.sh.jinja" if template_path is None
+            else self.template_path.basename()
+        )
         self.out_dir = self.base if out_dir is None else path.Path(out_dir)
         self.out_dir = self.out_dir.joinpath(self.clips.title)
+        self.input_path = self.out_dir.joinpath("inputs.txt")
         self.meta_path = self.out_dir.joinpath("chapter.ffmetadata")
         self.text_path = self.out_dir.joinpath("chapter.txt")
-        self.script_path = self.out_dir.joinpath(f"script.txt")
+        self.script_path = self.out_dir.joinpath(f"script.sh")
+        self.output_path = self.out_dir.joinpath(f"{self.clips.title}.mp4")
         try:
             self.out_dir.mkdir(mode=711)
         except FileExistsError:
             pass
 
+    def inputs(self) -> None:
+        with open(self.input_path, "w") as file:
+            for c in self.clips:
+                file.write(f"file '{c.path.basename()}'\n")
+
     def meta(self) -> None:
-        with open(self.meta_path, 'w') as file:
+        with open(self.meta_path, "w") as file:
             file.write(f"title={self.clips.title}\n")
             meta = self.clips.meta()
             file.write("".join(meta))
 
     def text(self) -> None:
-        with open(self.text_path, 'w') as file:
+        with open(self.text_path, "w") as file:
             file.write(f"{self.clips.title}\n")
             text = self.clips.text()
             file.write("".join(text))
 
-    @property
-    def concat(self) -> ffmpeg.nodes.OutputStream:
-        out = self.out_dir.joinpath(f"{self.clips.title}.mp4")
-        streams = [ffmpeg.input(c.path) for c in self.clips]
-        concat = (ffmpeg.concat(*streams)
-            .output(out)
-        )
-        return concat
-
-    @property
-    def map_chapter(self) -> List[str]:
-        out_kwargs = [
-            "-map_metadata", "0", 
-            "-map_chapters", "-1", 
-            "-movflags", "use_metadata_tags", 
-            "-movflags", "+faststart", 
-            ]
-        meta_kwargs = [
-            "-f", "ffmetadata",
-            "-i", f"{self.meta_path}"
-        ]
-        cmd = self.concat.compile() 
-        cmd = cmd[:-3] + meta_kwargs + out_kwargs + cmd[-3:]
-        return cmd
-
     def script(self):
-        with open(self.script_path, 'w') as file:
-            file.write(subprocess.list2cmdline(self.concat.compile()))
-            file.write('\n')
-            file.write(subprocess.list2cmdline(self.map_chapter))
-
-    def run(self):
-        return subprocess.Popen(self.map_chapter)
+        env = Environment(
+            loader=FileSystemLoader(self.template_path),
+            autoescape=select_autoescape(),
+        )
+        tmpl = env.get_template(self.template_name)
+        with open(self.script_path, "w") as file:
+            file.write(tmpl.render(output=self))
 
     def move(self):
         for c in self.clips:
             c.path = c.path.move(self.out_dir.joinpath(c.path.basename()))
 
-    def project(self, move: bool=True):
+    def copy(self):
+        for c in self.clips:
+            c.path = c.path.copy(self.out_dir.joinpath(c.path.basename()))
+
+    def project(self):
+        self.inputs()
         self.meta()
         self.text()
-        if move:
-            self.move()
         self.script()
+
+    def run(self):
+        subprocess.Popen(
+            args=['sh', 'script.sh'],
+            cwd=self.out_dir,
+        )
 
 
 class Test:
@@ -302,6 +312,7 @@ def read(args) -> Output:
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser(
         prog="VideoConcat",
         description=(
