@@ -151,6 +151,9 @@ class Clips:
         for c in self.clips:
             yield c
 
+    @property
+    def paths(self) -> str:
+        return [str(c.path) for c in self.clips]
 
 class Parser:
     """
@@ -302,13 +305,25 @@ class Test:
     pass
 
 
-def read(args) -> Output:
-    parser = Parser()
-    files = parser.files(path.Path(args.base))
-    clips = parser.clips(files)
-    output = Output(clips, args.base, args.out_dir)
-    return output
+class Interactive:
+    def __init__(self, args: object):
+        self.args = args
+        self.output = self.read()
 
+    def read(self) -> Output:
+        parser = Parser()
+        files = parser.files(path.Path(self.args.base))
+        clips = parser.clips(files)
+        output = Output(clips, args.base, args.out_dir)
+        return output
+
+    def reread(self):
+        self.output = self.read()
+
+    def move_and_run(self):
+        self.output.move()
+        self.output.project()
+        self.output.run()
 
 if __name__ == "__main__":
     import argparse
@@ -324,4 +339,10 @@ if __name__ == "__main__":
     parser.add_argument("-o", "--out_dir", action="store")
     parser.add_argument("-m", "--move", action="store_true")
     args = parser.parse_args()
-    output = read(args)
+    interactive = Interactive(args)
+    output = interactive.output
+
+    read = interactive.read
+    reread = interactive.reread
+    move_and_run = interactive.move_and_run
+
