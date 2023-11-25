@@ -337,10 +337,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("-b", "--base", action="store")
     parser.add_argument("-o", "--out_dir", action="store")
-    parser.add_argument("-m", "--move", action="store_true")
     args = parser.parse_args()
     interactive = Interactive(args)
-    output = interactive.output
 
     read = interactive.read
     reread = interactive.reread
