@@ -182,6 +182,15 @@ class Parser:
         filetype = r"(\.DVR(\.mp4)?)"
         return rf"{name} {date} - {time}{index}{filetype}"
 
+    def old_basic_pattern(self) -> str:
+        """Return old basic pattern strings"""
+        name = r"(.*)"
+        date = r"(\d{4} \d{2} \d{2})"
+        time = r"(\d{2} \d{2} \d{2})"
+        index = r"( \d*)"
+        filetype = r"( DVR(\.mp4)?)"
+        return rf"{name} {date}   {time}{index}{filetype}"
+
     def cut_pattern(self) -> str:
         start = r"(\d{2}\.\d{2}\.\d{2}\.\d{3})"
         end = r"(\d{2}\.\d{2}\.\d{2}\.\d{3})"
@@ -203,13 +212,27 @@ class Parser:
         """Parse file name to Clip"""
         # discard first element which is an empty string
         probe = ffmpeg.probe(file)
+        no_match = False
         try:
             name, date, time, index, DVR, mp4, rest = re.split(
                 self.basic_pattern(), str(file.basename())
             )[1:]
         except ValueError:
+            no_match = True
+
+
+        try:
+            name, date, time, index, DVR, mp4, rest = re.split(
+                self.old_basic_pattern(), str(file.basename())
+            )[1:]
+            no_match = False
+        except ValueError:
+            pass
+
+        if no_match:
             logger.warning(f"{file} is not a match")
             return None
+
 
         # length is in sec
         length: float = float(probe["format"]["duration"])
@@ -223,6 +246,11 @@ class Parser:
         clip = Clip(path=file, probe=probe, ch=chapter)
         return clip
 
+@dataclass
+class CompressionConfig:
+    enable: bool = False
+    bitrate: int = 0
+
 
 class Output:
     def __init__(
@@ -230,10 +258,12 @@ class Output:
         clips: Clips,
         base: str = "./",
         out_dir=None,
+        compress: CompressionConfig = CompressionConfig(),
         template_path = None,
     ):
         self.clips = clips
         self.base = path.Path(base)
+        self.compress = compress
         self.template_path = (
             "./" if template_path is None
             else path.Path(template_path).dirname()
@@ -274,6 +304,7 @@ class Output:
     def script(self):
         env = Environment(
             loader=FileSystemLoader(self.template_path),
+            trim_blocks=True,
             autoescape=select_autoescape(),
         )
         tmpl = env.get_template(self.template_name)
@@ -314,11 +345,30 @@ class Interactive:
         parser = Parser()
         files = parser.files(path.Path(self.args.base))
         clips = parser.clips(files)
-        output = Output(clips, args.base, args.out_dir)
+        output = Output(
+            clips=clips,
+            base=args.base,
+            out_dir=args.out_dir,
+            compress= CompressionConfig(
+                enable = args.compress,
+                bitrate = args.bitrate,
+            ),
+        )
         return output
 
     def reread(self):
         self.output = self.read()
+
+    def copy(self):
+        self.output.copy()
+        self.output.project()
+
+    def move(self):
+        self.output.move()
+        self.output.project()
+
+    def run(self):
+        self.output.run()
 
     def move_and_run(self):
         self.output.move()
@@ -337,10 +387,21 @@ if __name__ == "__main__":
     )
     parser.add_argument("-b", "--base", action="store")
     parser.add_argument("-o", "--out_dir", action="store")
+    parser.add_argument(
+        "-c", "--compress", action="store_true",
+        help="Compress flag that enables hevc_nvenc"
+    )
+    parser.add_argument(
+        "--bitrate", action="store", default=4,
+        help="Compression bitrate",
+    )
     args = parser.parse_args()
     interactive = Interactive(args)
 
     read = interactive.read
     reread = interactive.reread
+    copy = interactive.copy
+    move = interactive.move
+    run = interactive.run
     move_and_run = interactive.move_and_run
 

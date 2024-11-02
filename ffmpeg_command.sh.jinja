@@ -2,6 +2,9 @@ ffmpeg -hide_banner -f concat -safe 0 -protocol_whitelist 'file,pipe,fd' \
 -i inputs.txt \
 -f ffmetadata -i './chapter.ffmetadata' \
 -map '0:0' '-c:0' copy '-disposition:0' default -map '0:1' '-c:1' copy '-disposition:1' default \
--map_metadata 0 -map_chapters 1 -movflags use_metadata_tags -movflags \
-'+faststart' -default_mode infer_no_subs -ignore_unknown -f mp4 -y \
-'{{ output.clips.title }}.mp4'
+-map_metadata 0 -map_chapters 1 -movflags use_metadata_tags -movflags '+faststart' \
+-default_mode infer_no_subs -ignore_unknown \
+{% if output.compress.enable %}
+-c:v hevc_nvenc -preset fast -b:v {{ output.compress.bitrate }}M \
+{% endif %}
+-f mp4 -y '{{ output.clips.title }}.mp4'
