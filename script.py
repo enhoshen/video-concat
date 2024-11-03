@@ -155,6 +155,7 @@ class Clips:
     def paths(self) -> str:
         return [str(c.path) for c in self.clips]
 
+
 class Parser:
     """
     Parse file name produced by shadowplayer recording and lossless cut
@@ -182,14 +183,17 @@ class Parser:
         filetype = r"(\.DVR(\.mp4)?)"
         return rf"{name} {date} - {time}{index}{filetype}"
 
-    def old_basic_pattern(self) -> str:
+    def temporary_pattern(self) -> str:
         """Return old basic pattern strings"""
         name = r"(.*)"
         date = r"(\d{4} \d{2} \d{2})"
-        time = r"(\d{2} \d{2} \d{2})"
+        time = r"(\d{2} \d{2} \d*)"
+        #time = r"(\d{2} \d{2}})"
         index = r"( \d*)"
-        filetype = r"( DVR(\.mp4)?)"
-        return rf"{name} {date}   {time}{index}{filetype}"
+        #filetype = r"( DVR(\.mp4)?)"
+        filetype = r"(\.mp4)"
+        #return rf"{name} {date}   {time}{index}{filetype}"
+        return rf"{name} {date}   {time}"
 
     def cut_pattern(self) -> str:
         start = r"(\d{2}\.\d{2}\.\d{2}\.\d{3})"
@@ -217,15 +221,18 @@ class Parser:
             name, date, time, index, DVR, mp4, rest = re.split(
                 self.basic_pattern(), str(file.basename())
             )[1:]
+            cut = self.parse_cut(rest)
         except ValueError:
             no_match = True
 
 
         try:
-            name, date, time, index, DVR, mp4, rest = re.split(
-                self.old_basic_pattern(), str(file.basename())
+            #name, date, time, index, DVR, mp4, rest = re.split(
+            name, date, time, rest = re.split(
+                self.temporary_pattern(), str(file.basename())
             )[1:]
             no_match = False
+            cut = ""
         except ValueError:
             pass
 
@@ -241,7 +248,7 @@ class Parser:
             date=date,
             time=time,
             length=Time().from_sec(length),
-            cut=self.parse_cut(rest),
+            cut=cut,
         )
         clip = Clip(path=file, probe=probe, ch=chapter)
         return clip
@@ -326,7 +333,7 @@ class Output:
         self.script()
 
     def run(self):
-        subprocess.Popen(
+        subprocess.run(
             args=['sh', 'script.sh'],
             cwd=self.out_dir,
         )
@@ -339,41 +346,51 @@ class Test:
 class Interactive:
     def __init__(self, args: object):
         self.args = args
+        if self.args.standby:
+            return
         self.output = self.read()
 
-    def read(self) -> Output:
+    def compress_all(self) -> None:
+        #base = self.args.base.replace(" ", "\\ ")
+        base = self.args.base
+        subprocess.run(
+            args=[
+                'sh', 'compress.sh', base, f"{self.args.bitrate}",
+            ],
+        )
+
+    def read(self, base: Optional[str]=None) -> Output:
         parser = Parser()
-        files = parser.files(path.Path(self.args.base))
+        if base is None:
+            base = self.args.base
+        
+        files = parser.files(path.Path(base))
         clips = parser.clips(files)
         output = Output(
             clips=clips,
-            base=args.base,
-            out_dir=args.out_dir,
+            base=base,
+            out_dir=self.args.out_dir,
             compress= CompressionConfig(
-                enable = args.compress,
-                bitrate = args.bitrate,
+                enable = self.args.compress,
+                bitrate = self.args.bitrate,
             ),
         )
         return output
 
-    def reread(self):
+    def reread(self) -> None:
         self.output = self.read()
 
-    def copy(self):
+    def copy(self) -> None:
         self.output.copy()
         self.output.project()
 
-    def move(self):
+    def move(self) -> None:
         self.output.move()
         self.output.project()
 
-    def run(self):
+    def run(self) -> None:
         self.output.run()
 
-    def move_and_run(self):
-        self.output.move()
-        self.output.project()
-        self.output.run()
 
 if __name__ == "__main__":
     import argparse
@@ -384,6 +401,10 @@ if __name__ == "__main__":
             "Produce chapter metadata/text from video names produced "
             "combination of shadowplay and losslesscut",
         ),
+    )
+    parser.add_argument(
+        "-s", "--standby", action="store_true",
+        help="Don't read files under base during setup"
     )
     parser.add_argument("-b", "--base", action="store")
     parser.add_argument("-o", "--out_dir", action="store")
@@ -403,5 +424,5 @@ if __name__ == "__main__":
     copy = interactive.copy
     move = interactive.move
     run = interactive.run
-    move_and_run = interactive.move_and_run
+    compress = interactive.compress_all
 
