@@ -355,7 +355,7 @@ class Interactive:
         base = self.args.base
         subprocess.run(
             args=[
-                'sh', 'compress.sh', base, f"{self.args.bitrate}",
+                'bash', 'compress.sh', base, f"{self.args.bitrate}",
             ],
         )
 
