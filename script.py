@@ -4,8 +4,9 @@
 
 import path
 import re
-from typing import List, Optional
+from typing import List, Optional, Tuple, Union
 from dataclasses import dataclass
+from abc import ABC, abstractmethod
 import logging
 import subprocess
 
@@ -33,13 +34,6 @@ class Time:
         if self.msec >= 1000:
             self.msec = int(self.msec // 10)
 
-    def __str__(self) -> str:
-        return f"{self.hr:02}.{self.min:02}.{self.sec:02}.{self.msec:0<4}"
-
-    def to_text(self) -> str:
-        """To youtube chapter text"""
-        return f"{self.hr:02}:{self.min:02}:{self.sec:02}"
-
     def to_msec(self) -> int:
         hr = self.hr * 3600
         min = self.min * 60
@@ -48,6 +42,9 @@ class Time:
         return ((hr + min + sec) * 1000) + msec
 
     def from_sec(self, num: float):
+        """
+        Create Time object from floating point in unit of second
+        """
         sec = int(num)
         self.msec = int((num - sec) * 1000)
         min = sec // 60
@@ -57,13 +54,37 @@ class Time:
         return self
 
 
+class TimeToText(ABC):
+    @abstractmethod
+    def text(self, time: Time) -> str:
+        ...
+
+
+class All(TimeToText):
+    def text(self, time: Time) -> str:
+        return f"{time.hr:02}.{time.min:02}.{time.sec:02}.{time.msec:0<4}"
+
+
+class YoutubeTimestamp(TimeToText):
+    def text(self, time: Time) -> str:
+        return f"{time.hr:02}:{time.min:02}:{time.sec:02}"
+
+
+class NoHr(TimeToText):
+    def text(self, time: Time) -> str:
+        return f"{time.min:02}:{time.sec:02}"
+
+
 @dataclass
 class Cut:
     start: Time
     end: Time
+    style: TimeToText = NoHr()
 
     def __str__(self):
-        return f"{self.start}-{self.end}"
+        start = self.style.text(time=self.start)
+        end = self.style.text(time=self.end)
+        return f"{start}-{end}"
 
 
 @dataclass
@@ -72,9 +93,13 @@ class Chapter:
     date: str
     time: str
     length: Time
+    index: str
     cut: Optional[Cut]
 
-    def to_text(self, start: int):
+    def __post_init__(self):
+        self.yt_timestamp = YoutubeTimestamp()
+
+    def to_text(self, start: int) -> str:
         """
         Produce youtube chapter text
         Args:
@@ -83,10 +108,10 @@ class Chapter:
         """
         start = Time().from_sec(float(start / 1000))
         cut = "" if self.cut is None else " " + str(self.cut)
-        s = f"{start.to_text()} {self.date}-{self.time}{cut}\n"
+        s = f"{self.yt_timestamp.text(start)} {self.date}-{self.time}{cut}\n"
         return s
 
-    def to_meta(self, start: int):
+    def to_meta(self, start: int) -> str:
         """
         Produce ffmpeg chapter metadata
         Args:
@@ -101,6 +126,7 @@ class Chapter:
             f"START={start}\n"
             f"END={end}\n"
             f"title={self.date}-{self.time}{cut}\n"
+            f"index={self.index}\n"
         )
         return s
 
@@ -139,12 +165,24 @@ class Clips:
 
     def meta(self) -> List[str]:
         starts = self.accum()
-        meta = [clip.ch.to_meta(start) for clip, start in zip(self.clips, starts)]
+        meta = [
+            clip.ch.to_meta(start) for clip, start in zip(self.clips, starts)
+        ]
         return meta
 
     def text(self) -> List[str]:
         starts = self.accum()
-        text = [clip.ch.to_text(start) for clip, start in zip(self.clips, starts)]
+        text = [
+            clip.ch.to_text(start) for clip, start in zip(self.clips, starts)
+        ]
+        return text
+
+    def text_with_index(self) -> List[str]:
+        starts = self.accum()
+        text = [
+            f"{clip.ch.index}-{clip.ch.to_text(start)}"
+            for clip, start in zip(self.clips, starts)
+        ]
         return text
 
     def __iter__(self):
@@ -156,44 +194,33 @@ class Clips:
         return [str(c.path) for c in self.clips]
 
 
-class Parser:
-    """
-    Parse file name produced by shadowplayer recording and lossless cut
-    program, and probe dictionary from ffmpeg.probe(), convert to struct
-    and output concated video with updated metadate containing chapter
-    information
-    """
+class Pattern(ABC):
+    @abstractmethod
+    def re(self) -> str:
+        ...
 
-    def files(self, base: path.Path):
-        files = base.listdir()
-        files = [path.Path(f) for f in files if re.match(r".*\.mp4$", str(f))]
-        return files
+    @abstractmethod
+    def parse(self, inpt: str) -> str:
+        ...
 
-    def clips(self, files: List[path.Path]) -> Clips:
-        clips = [self.parse(file) for file in files]
-        clips = [clip for clip in clips if clip is not None]
-        return Clips(clips)
 
-    def basic_pattern(self) -> str:
+@dataclass
+class ClipInfo:
+    name: str
+    date: str
+    time: str
+    index: str = ""
+
+
+class Basic(Pattern):
+    def re(self) -> str:
         """Return basic pattern strings"""
         name = r"(.*)"
         date = r"(\d{4}\.\d{2}\.\d{2})"
         time = r"(\d{2}\.\d{2}\.\d{2})"
-        index = r"(\.\d*)"
+        index = r"\.(\d*)"
         filetype = r"(\.DVR(\.mp4)?)"
         return rf"{name} {date} - {time}{index}{filetype}"
-
-    def temporary_pattern(self) -> str:
-        """Return old basic pattern strings"""
-        name = r"(.*)"
-        date = r"(\d{4} \d{2} \d{2})"
-        time = r"(\d{2} \d{2} \d*)"
-        #time = r"(\d{2} \d{2}})"
-        index = r"( \d*)"
-        #filetype = r"( DVR(\.mp4)?)"
-        filetype = r"(\.mp4)"
-        #return rf"{name} {date}   {time}{index}{filetype}"
-        return rf"{name} {date}   {time}"
 
     def cut_pattern(self) -> str:
         start = r"(\d{2}\.\d{2}\.\d{2}\.\d{3})"
@@ -212,46 +239,103 @@ class Parser:
             cut = Cut(start=Time(*start), end=Time(*end))
         return cut
 
-    def parse(self, file: path.Path) -> Optional[Clip]:
-        """Parse file name to Clip"""
-        # discard first element which is an empty string
-        probe = ffmpeg.probe(file)
-        no_match = False
-        try:
-            name, date, time, index, DVR, mp4, rest = re.split(
-                self.basic_pattern(), str(file.basename())
-            )[1:]
-            cut = self.parse_cut(rest)
-        except ValueError:
-            no_match = True
+    def parse(self, inpt: str) -> ClipInfo:
+        name, date, time, index, DVR, mp4, rest = re.split(self.re(), inpt)[1:]
+        clip = ClipInfo(
+            name=name,
+            date=date,
+            time=time,
+            index=index,
+        )
+        cut = ""
+        if rest:
+            cut = self.parse_cut(s=rest)
+        return clip, cut
 
 
-        try:
-            #name, date, time, index, DVR, mp4, rest = re.split(
-            name, date, time, rest = re.split(
-                self.temporary_pattern(), str(file.basename())
-            )[1:]
-            no_match = False
-            cut = ""
-        except ValueError:
-            pass
+def temporary_pattern(self) -> str:
+    """Return old basic pattern strings"""
+    name = r"(.*)"
+    date = r"(\d{4} \d{2} \d{2})"
+    time = r"(\d{2} \d{2} \d*)"
+    # time = r"(\d{2} \d{2}})"
+    index = r"( \d*)"
+    # filetype = r"( DVR(\.mp4)?)"
+    filetype = r"(\.mp4)"
+    # return rf"{name} {date}   {time}{index}{filetype}"
+    #
+    #        # name, date, time, index, DVR, mp4, rest = re.split(
+    #    try:
+    #        name, date, time, rest = re.split(
+    #            self.temporary_pattern(), str(file.basename())
+    #        )[1:]
+    #        no_match = False
+    #        cut = ""
+    #    except ValueError:
+    #        pass
+    return rf"{name} {date}   {time}"
+
+
+class Parser:
+    """
+    Parse file name produced by shadowplayer recording and lossless cut
+    program, and probe dictionary from ffmpeg.probe(), convert to struct
+    and output concated video with updated metadate containing chapter
+    information
+    """
+
+    def __init__(self) -> None:
+        self.patterns = [Basic()]
+
+    def files(self, base: path.Path):
+        files = base.listdir()
+        files = [path.Path(f) for f in files if re.match(r".*\.mp4$", str(f))]
+        return files
+
+    def clips(self, files: List[path.Path]) -> Clips:
+        clips = [self.parse(file) for file in files]
+        clips = [clip for clip in clips if clip is not None]
+        return Clips(clips)
+
+    def parse_info(
+        self, file: path.Path
+    ) -> Optional[Tuple[ClipInfo, Union[str, Cut]]]:
+        no_match = True
+        for p in self.patterns:
+            try:
+                clip_info, cut = p.parse(str(file.basename()))
+                no_match = False
+                continue
+            except ValueError:
+                no_match = True
 
         if no_match:
             logger.warning(f"{file} is not a match")
             return None
+        return clip_info, cut
 
+    def parse(self, file: path.Path) -> Optional[Clip]:
+        """Parse file name to Clip"""
+        # discard first element which is an empty string
+        probe = ffmpeg.probe(file)
+        info = self.parse_info(file=file)
+        if info is None:
+            return None
+        clip_info, cut = info
 
         # length is in sec
         length: float = float(probe["format"]["duration"])
         chapter = Chapter(
-            name=name,
-            date=date,
-            time=time,
+            name=clip_info.name,
+            date=clip_info.date,
+            time=clip_info.time,
             length=Time().from_sec(length),
+            index=clip_info.index,
             cut=cut,
         )
         clip = Clip(path=file, probe=probe, ch=chapter)
         return clip
+
 
 @dataclass
 class CompressionConfig:
@@ -266,17 +350,19 @@ class Output:
         base: str = "./",
         out_dir=None,
         compress: CompressionConfig = CompressionConfig(),
-        template_path = None,
+        template_path=None,
     ):
         self.clips = clips
         self.base = path.Path(base)
         self.compress = compress
         self.template_path = (
-            "./" if template_path is None
+            "./"
+            if template_path is None
             else path.Path(template_path).dirname()
         )
         self.template_name = (
-            "ffmpeg_command.sh.jinja" if template_path is None
+            "ffmpeg_command.sh.jinja"
+            if template_path is None
             else self.template_path.basename()
         )
         self.out_dir = self.base if out_dir is None else path.Path(out_dir)
@@ -284,6 +370,7 @@ class Output:
         self.input_path = self.out_dir.joinpath("inputs.txt")
         self.meta_path = self.out_dir.joinpath("chapter.ffmetadata")
         self.text_path = self.out_dir.joinpath("chapter.txt")
+        self.index_chapter_path = self.out_dir.joinpath("chapter_index.txt")
         self.script_path = self.out_dir.joinpath(f"script.sh")
         self.output_path = self.out_dir.joinpath(f"{self.clips.title}.mp4")
         try:
@@ -306,6 +393,9 @@ class Output:
         with open(self.text_path, "w") as file:
             file.write(f"{self.clips.title}\n")
             text = self.clips.text()
+            file.write("".join(text))
+        with open(self.index_chapter_path, "w") as file:
+            text = self.clips.text_with_index()
             file.write("".join(text))
 
     def script(self):
@@ -334,7 +424,7 @@ class Output:
 
     def run(self):
         subprocess.run(
-            args=['sh', 'script.sh'],
+            args=["sh", "script.sh"],
             cwd=self.out_dir,
         )
 
@@ -351,28 +441,31 @@ class Interactive:
         self.output = self.read()
 
     def compress_all(self) -> None:
-        #base = self.args.base.replace(" ", "\\ ")
+        # base = self.args.base.replace(" ", "\\ ")
         base = self.args.base
         subprocess.run(
             args=[
-                'bash', 'compress.sh', base, f"{self.args.bitrate}",
+                "bash",
+                "compress.sh",
+                base,
+                f"{self.args.bitrate}",
             ],
         )
 
-    def read(self, base: Optional[str]=None) -> Output:
+    def read(self, base: Optional[str] = None) -> Output:
         parser = Parser()
         if base is None:
             base = self.args.base
-        
+
         files = parser.files(path.Path(base))
         clips = parser.clips(files)
         output = Output(
             clips=clips,
             base=base,
             out_dir=self.args.out_dir,
-            compress= CompressionConfig(
-                enable = self.args.compress,
-                bitrate = self.args.bitrate,
+            compress=CompressionConfig(
+                enable=self.args.compress,
+                bitrate=self.args.bitrate,
             ),
         )
         return output
@@ -403,17 +496,23 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
-        "-s", "--standby", action="store_true",
-        help="Don't read files under base during setup"
+        "-s",
+        "--standby",
+        action="store_true",
+        help="Don't read files under base during setup",
     )
     parser.add_argument("-b", "--base", action="store")
     parser.add_argument("-o", "--out_dir", action="store")
     parser.add_argument(
-        "-c", "--compress", action="store_true",
-        help="Compress flag that enables hevc_nvenc"
+        "-c",
+        "--compress",
+        action="store_true",
+        help="Compress flag that enables hevc_nvenc",
     )
     parser.add_argument(
-        "--bitrate", action="store", default=4,
+        "--bitrate",
+        action="store",
+        default=4,
         help="Compression bitrate",
     )
     args = parser.parse_args()
@@ -425,4 +524,3 @@ if __name__ == "__main__":
     move = interactive.move
     run = interactive.run
     compress = interactive.compress_all
-
