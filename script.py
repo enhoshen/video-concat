@@ -1,6 +1,6 @@
 # Contributors
 # ---------------------------
-# En-Ho Shen <enhoshen@gmail.com>, 2023
+# En-Ho Shen <enhoshen@gmail.com>, 2025
 
 import path
 import re
@@ -515,8 +515,19 @@ if __name__ == "__main__":
         default=4,
         help="Compression bitrate",
     )
+    parser.add_argument(
+        "-m",
+        "--move",
+        action="store_true",
+        default=False,
+        help="If specified, move videos and start processing",
+    )
     args = parser.parse_args()
     interactive = Interactive(args)
+    if args.move:
+        interactive.move()
+        interactive.run()
+        exit(0)
 
     read = interactive.read
     reread = interactive.reread

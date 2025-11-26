@@ -1,11 +1,6 @@
-# Copyright (C) Ganzin Technology - All Rights Reserved
-# ---------------------------
-# Unauthorized copying of this file, via any medium is strictly prohibited
-# Proprietary and confidential
-#
 # Contributors
 # ---------------------------
-# En-Ho Shen <enho.shen@ganzin.com.tw>, 2025
+# En-Ho Shen <enhoshen@gmail.com>, 2025
 
 from path import Path
 
