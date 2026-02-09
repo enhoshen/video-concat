@@ -381,7 +381,21 @@ class Output:
     def inputs(self) -> None:
         with open(self.input_path, "w") as file:
             for c in self.clips:
-                file.write(f"file '{c.path.basename()}'\n")
+                basename = c.path.basename()
+                # escape literal quote to be '\''
+                # refer to FFmpeg's concat Demuxer Format
+                # EX: abc'efg needs to be enclosed in quote
+                #     'abc'eft'
+                #     then the single quote inside the original must be
+                #     escaped, so separate the orignal string around
+                #     the quote
+                #     'abc'''eft'
+                #     then escape the middle quote
+                #     'abc'\''eft'
+                # now to output this string from python, the back slash
+                # needs to be escaped, thus '\\''
+                basename = basename.replace("'", "'\\''")
+                file.write(f"file '{basename}'\n")
 
     def meta(self) -> None:
         with open(self.meta_path, "w") as file:

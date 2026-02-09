@@ -7,4 +7,4 @@ ffmpeg -hide_banner -f concat -safe 0 -protocol_whitelist 'file,pipe,fd' \
 {% if output.compress.enable %}
 -c:v hevc_nvenc -preset fast -b:v {{ output.compress.bitrate }}M \
 {% endif %}
--f mp4 -y '{{ output.clips.title }}.mp4'
+-f mp4 -y "{{ output.clips.title }}.mp4"
