@@ -4,7 +4,7 @@
 
 import path
 import re
-from typing import List, Optional, Tuple, Union
+from typing import List, Dict, Optional, Tuple, Union
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
 import logging
@@ -95,6 +95,7 @@ class Chapter:
     length: Time
     index: str
     cut: Optional[Cut]
+    comment: str = ""
 
     def __post_init__(self):
         self.yt_timestamp = YoutubeTimestamp()
@@ -108,8 +109,10 @@ class Chapter:
         """
         start = Time().from_sec(float(start / 1000))
         cut = "" if self.cut is None else " " + str(self.cut)
-        s = f"{self.yt_timestamp.text(start)} {self.date}-{self.time}{cut}\n"
-        return s
+        s = f"{self.yt_timestamp.text(start)} {self.date}-{self.time}{cut}"
+        if self.comment != "":
+            s = f"{s} {self.comment}"
+        return s + "\n"
 
     def to_meta(self, start: int) -> str:
         """
@@ -128,6 +131,8 @@ class Chapter:
             f"title={self.date}-{self.time}{cut}\n"
             f"index={self.index}\n"
         )
+        if self.comment != "":
+            s += f"comment={self.comment}\n"
         return s
 
 
@@ -292,13 +297,41 @@ class Parser:
         files = [path.Path(f) for f in files if re.match(r".*\.mp4$", str(f))]
         return files
 
-    def clips(self, files: List[path.Path]) -> Clips:
-        clips = [self.parse(file) for file in files]
+    def clips(
+        self, files: List[path.Path], comment_map: dict[str, str]
+    ) -> Clips:
+        clips = [
+            self.parse(file=file, comment_map=comment_map) for file in files
+        ]
         clips = [clip for clip in clips if clip is not None]
         return Clips(clips)
 
+    def comments(self, file_path: str) -> dict[str, str]:
+        """Reads comments from a file and returns a dictionary mapping index to comment."""
+        comments = {}
+        try:
+            with open(file_path, "r") as f:
+                for line in f:
+                    parts = line.strip().split(maxsplit=1)
+                    if len(parts) == 2:
+                        index, comment = parts
+                        # Ensure index is treated as string for consistency with ClipInfo.index
+                        comments[str(index)] = comment
+                    elif (
+                        len(parts) == 1 and parts[0]
+                    ):  # Handle case where there's only an index
+                        logger.warning(
+                            f"Line in comment file '{file_path}' has an index but no comment: '{line.strip()}'"
+                        )
+        except FileNotFoundError:
+            logger.error(f"Comment file not found: {file_path}")
+        except Exception as e:
+            logger.error(f"Error reading comment file {file_path}: {e}")
+        return comments
+
     def parse_info(
-        self, file: path.Path
+        self,
+        file: path.Path,
     ) -> Optional[Tuple[ClipInfo, Union[str, Cut]]]:
         no_match = True
         for p in self.patterns:
@@ -314,7 +347,9 @@ class Parser:
             return None
         return clip_info, cut
 
-    def parse(self, file: path.Path) -> Optional[Clip]:
+    def parse(
+        self, file: path.Path, comment_map: Optional[Dict[str, str]] = None
+    ) -> Optional[Clip]:
         """Parse file name to Clip"""
         # discard first element which is an empty string
         probe = ffmpeg.probe(file)
@@ -325,6 +360,11 @@ class Parser:
 
         # length is in sec
         length: float = float(probe["format"]["duration"])
+        comment = (
+            comment_map.get(clip_info.index)
+            if comment_map is not None
+            else None
+        )
         chapter = Chapter(
             name=clip_info.name,
             date=clip_info.date,
@@ -332,6 +372,7 @@ class Parser:
             length=Time().from_sec(length),
             index=clip_info.index,
             cut=cut,
+            comment="" if comment is None else comment,
         )
         clip = Clip(path=file, probe=probe, ch=chapter)
         return clip
@@ -472,7 +513,11 @@ class Interactive:
             base = self.args.base
 
         files = parser.files(path.Path(base))
-        clips = parser.clips(files)
+        comment_map: dict[str, str] = parser.comments(
+            file_path=self.args.comment_file
+        )
+        clips = parser.clips(files=files, comment_map=comment_map)
+
         output = Output(
             clips=clips,
             base=base,
@@ -535,6 +580,12 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
         help="If specified, move videos and start processing",
+    )
+    parser.add_argument(
+        "-cf",
+        "--comment-file",
+        action="store",
+        help="Path to the comment file, where each line is '<index> <comment>'",
     )
     args = parser.parse_args()
     interactive = Interactive(args)
