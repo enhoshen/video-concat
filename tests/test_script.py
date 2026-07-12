@@ -77,9 +77,9 @@ def test_chapter_to_text():
     #   + timedelta(hours=15, minutes=56, seconds=26)
     #   + timedelta(seconds=8, milliseconds=352)
     #            = datetime(2026, 7, 11, 15, 56, 34, 352000)
-    # strftime("%m.%d-%H.%M") -> "07.11-15.56"
-    # Expected: "00:00:00 07.11-15.56 Test Comment\n"
-    assert text_out1 == "00:00:00 07.11-15.56 Test Comment\n"
+    # strftime("%m.%d-%H.%M.%S") -> "07.11-15.56.34"
+    # Expected: "00:00:00 07.11-15.56.34 Test Comment\n"
+    assert text_out1 == "00:00:00 07.11-15.56.34 Test Comment\n"
 
     line2 = "Abiotic Factor 2026.07.11 - 15.58.26.690.DVR.mp4"
     clip_info2, cut2 = basic.parse(line2)
@@ -96,6 +96,62 @@ def test_chapter_to_text():
     text_out2 = chapter2.to_text(30000)
     # date_start = datetime(2026, 7, 11) + timedelta(hours=15, minutes=58, seconds=26) + timedelta(0)
     #            = datetime(2026, 7, 11, 15, 58, 26)
-    # strftime("%m.%d-%H.%M") -> "07.11-15.58"
-    # Expected: "00:00:30 07.11-15.58\n"
-    assert text_out2 == "00:00:30 07.11-15.58\n"
+    # strftime("%m.%d-%H.%M.%S") -> "07.11-15.58.26"
+    # Expected: "00:00:30 07.11-15.58.26\n"
+    assert text_out2 == "00:00:30 07.11-15.58.26\n"
+
+
+def test_datetime_crossing_boundaries():
+    basic = script.Basic()
+    
+    # 1. Crossing Day and Month: July 31st 23:59:55 + 10s (cut.start)
+    # This should cross midnight and result in August 1st, 00:00:05
+    line1 = "Abiotic Factor 2026.07.31 - 23.59.55.000.DVR.mp4-00.00.10.000-00.00.20.000.mp4"
+    clip_info1, cut1 = basic.parse(line1)
+    
+    assert clip_info1.date == datetime(2026, 7, 31)
+    assert clip_info1.time == timedelta(hours=23, minutes=59, seconds=55)
+    assert cut1 is not None
+    assert cut1.start == timedelta(seconds=10)
+    
+    chapter1 = script.Chapter(
+        name=clip_info1.name,
+        date=clip_info1.date,
+        time=clip_info1.time,
+        length=timedelta(seconds=60.0),
+        index=clip_info1.index,
+        cut=cut1,
+        comment="Boundary Month",
+    )
+    text_out1 = chapter1.to_text(0)
+    # date_start = datetime(2026, 7, 31) + timedelta(hours=23, minutes=59, seconds=55) + timedelta(seconds=10)
+    #            = datetime(2026, 8, 1, 0, 0, 5)
+    # strftime("%m.%d-%H.%M.%S") -> "08.01-00.00.05"
+    assert "08.01-00.00.05" in text_out1
+    assert text_out1.startswith("00:00:00")
+
+    # 2. Crossing Year: December 31st 23:59:55 + 10s (cut.start)
+    # This should cross the year boundary and result in January 1st, 00:00:05
+    line2 = "Abiotic Factor 2026.12.31 - 23.59.55.000.DVR.mp4-00.00.10.000-00.00.20.000.mp4"
+    clip_info2, cut2 = basic.parse(line2)
+    
+    assert clip_info2.date == datetime(2026, 12, 31)
+    assert clip_info2.time == timedelta(hours=23, minutes=59, seconds=55)
+    assert cut2 is not None
+    assert cut2.start == timedelta(seconds=10)
+    
+    chapter2 = script.Chapter(
+        name=clip_info2.name,
+        date=clip_info2.date,
+        time=clip_info2.time,
+        length=timedelta(seconds=60.0),
+        index=clip_info2.index,
+        cut=cut2,
+        comment="Boundary Year",
+    )
+    text_out2 = chapter2.to_text(0)
+    # date_start = datetime(2026, 12, 31) + timedelta(hours=23, minutes=59, seconds=55) + timedelta(seconds=10)
+    #            = datetime(2027, 1, 1, 0, 0, 5)
+    # strftime("%m.%d-%H.%M.%S") -> "01.01-00.00.05"
+    assert "01.01-00.00.05" in text_out2
+    assert text_out2.startswith("00:00:00")

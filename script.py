@@ -87,7 +87,7 @@ class Chapter:
         cut = self.cut
         cut_start = cut.start if cut is not None else timedelta(0)
         date_start = self.date + self.time + cut_start
-        date_time_str = date_start.strftime("%m.%d-%H.%M")
+        date_time_str = date_start.strftime("%m.%d-%H.%M.%S")
         date_start_str = date_time_str
         s = f"{self.yt_timestamp.text(start_td)} {date_start_str}"
         if self.comment != "":
@@ -133,7 +133,9 @@ class Clips:
 
     def accum(self):
         """Accumulate start time of each chapters in msec"""
-        lengths = [int(clip.ch.length.total_seconds() * 1000) for clip in self.clips]
+        lengths = [
+            int(clip.ch.length.total_seconds() * 1000) for clip in self.clips
+        ]
         starts = [0]
         for i in lengths:
             starts.append(starts[-1] + i)
@@ -149,11 +151,7 @@ class Clips:
         c0_time = (datetime.min + c0.time).time().strftime("%H.%M.%S")
         cn_date = cn.date.strftime("%Y.%m.%d")
         cn_time = (datetime.min + cn.time).time().strftime("%H.%M.%S")
-        title = (
-            f"{c0.name} "
-            f"{c0_date}-{c0_time} "
-            f"{cn_date}-{cn_time}"
-        )
+        title = f"{c0.name} " f"{c0_date}-{c0_time} " f"{cn_date}-{cn_time}"
         return title
 
     def meta(self) -> List[str]:
@@ -235,22 +233,28 @@ class Basic(Pattern):
                 hours=start_ints[0],
                 minutes=start_ints[1],
                 seconds=start_ints[2],
-                milliseconds=start_ints[3]
+                milliseconds=start_ints[3],
             )
             cut_end = timedelta(
                 hours=end_ints[0],
                 minutes=end_ints[1],
                 seconds=end_ints[2],
-                milliseconds=end_ints[3]
+                milliseconds=end_ints[3],
             )
             cut = Cut(start=cut_start, end=cut_end)
         return cut
 
     def parse(self, inpt: str) -> Tuple[ClipInfo, Optional[Cut]]:
-        name, date_str, time_str, index, DVR, mp4, rest = re.split(self.re(), inpt)[1:]
-        dt_obj = datetime.strptime(f"{date_str} {time_str}", "%Y.%m.%d %H.%M.%S")
+        name, date_str, time_str, index, DVR, mp4, rest = re.split(
+            self.re(), inpt
+        )[1:]
+        dt_obj = datetime.strptime(
+            f"{date_str} {time_str}", "%Y.%m.%d %H.%M.%S"
+        )
         date_val = datetime(dt_obj.year, dt_obj.month, dt_obj.day)
-        time_val = timedelta(hours=dt_obj.hour, minutes=dt_obj.minute, seconds=dt_obj.second)
+        time_val = timedelta(
+            hours=dt_obj.hour, minutes=dt_obj.minute, seconds=dt_obj.second
+        )
         clip = ClipInfo(
             name=name,
             date=date_val,
