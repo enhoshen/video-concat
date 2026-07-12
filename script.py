@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from abc import ABC, abstractmethod
 import logging
 import subprocess
+from datetime import datetime, date, time, timedelta
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 import ffmpeg
@@ -17,68 +18,43 @@ import ffmpeg
 logger = logging.getLogger()
 
 
-@dataclass
-class Time:
-    hr: int = 0
-    min: int = 0
-    sec: int = 0
-    msec: int = 0
-
-    def __post_init__(self):
-        """support for init with str"""
-        self.hr = int(self.hr)
-        self.min = int(self.min)
-        self.sec = int(self.sec)
-        self.msec = int(self.msec)
-        # if msec is 4 digits
-        if self.msec >= 1000:
-            self.msec = int(self.msec // 10)
-
-    def to_msec(self) -> int:
-        hr = self.hr * 3600
-        min = self.min * 60
-        sec = self.sec
-        msec = self.msec
-        return ((hr + min + sec) * 1000) + msec
-
-    def from_sec(self, num: float):
-        """
-        Create Time object from floating point in unit of second
-        """
-        sec = int(num)
-        self.msec = int((num - sec) * 1000)
-        min = sec // 60
-        self.sec = sec % 60
-        self.hr = min // 60
-        self.min = min % 60
-        return self
-
-
 class TimeToText(ABC):
     @abstractmethod
-    def text(self, time: Time) -> str:
+    def text(self, time: timedelta) -> str:
         ...
 
 
 class All(TimeToText):
-    def text(self, time: Time) -> str:
-        return f"{time.hr:02}.{time.min:02}.{time.sec:02}.{time.msec:0<4}"
+    def text(self, time: timedelta) -> str:
+        total_seconds = int(time.total_seconds())
+        hr = total_seconds // 3600
+        min = (total_seconds % 3600) // 60
+        sec = total_seconds % 60
+        msec = int(time.microseconds / 1000)
+        return f"{hr:02}.{min:02}.{sec:02}.{msec:0<4}"
 
 
 class YoutubeTimestamp(TimeToText):
-    def text(self, time: Time) -> str:
-        return f"{time.hr:02}:{time.min:02}:{time.sec:02}"
+    def text(self, time: timedelta) -> str:
+        total_seconds = int(time.total_seconds())
+        hr = total_seconds // 3600
+        min = (total_seconds % 3600) // 60
+        sec = total_seconds % 60
+        return f"{hr:02}:{min:02}:{sec:02}"
 
 
 class NoHr(TimeToText):
-    def text(self, time: Time) -> str:
-        return f"{time.min:02}:{time.sec:02}"
+    def text(self, time: timedelta) -> str:
+        total_seconds = int(time.total_seconds())
+        min = (total_seconds % 3600) // 60
+        sec = total_seconds % 60
+        return f"{min:02}:{sec:02}"
 
 
 @dataclass
 class Cut:
-    start: Time
-    end: Time
+    start: timedelta
+    end: timedelta
     style: TimeToText = NoHr()
 
     def __str__(self):
@@ -90,9 +66,9 @@ class Cut:
 @dataclass
 class Chapter:
     name: str
-    date: str
-    time: str
-    length: Time
+    date: datetime
+    time: timedelta
+    length: timedelta
     index: str
     cut: Optional[Cut]
     comment: str = ""
@@ -107,9 +83,13 @@ class Chapter:
         start: int
             start time in msec, the end time of the previous chapter
         """
-        start = Time().from_sec(float(start / 1000))
-        cut = "" if self.cut is None else " " + str(self.cut)
-        s = f"{self.yt_timestamp.text(start)} {self.date}-{self.time}{cut}"
+        start_td = timedelta(milliseconds=start)
+        cut = self.cut
+        cut_start = cut.start if cut is not None else timedelta(0)
+        date_start = self.date + self.time + cut_start
+        date_time_str = date_start.strftime("%m.%d-%H.%M")
+        date_start_str = date_time_str
+        s = f"{self.yt_timestamp.text(start_td)} {date_start_str}"
         if self.comment != "":
             s = f"{s} {self.comment}"
         return s + "\n"
@@ -121,14 +101,16 @@ class Chapter:
         start: int
             start time in msec, the end time of the previous chapter
         """
-        end = start + self.length.to_msec()
+        end = start + int(self.length.total_seconds() * 1000)
         cut = "" if self.cut is None else " " + str(self.cut)
+        date_str = self.date.strftime("%Y.%m.%d")
+        time_str = (datetime.min + self.time).time().strftime("%H.%M.%S")
         s = (
             "[CHAPTER]\n"
             f"TIMEBASE=1/1000\n"
             f"START={start}\n"
             f"END={end}\n"
-            f"title={self.date}-{self.time}{cut}\n"
+            f"title={date_str}-{time_str}{cut}\n"
             f"index={self.index}\n"
         )
         if self.comment != "":
@@ -151,7 +133,7 @@ class Clips:
 
     def accum(self):
         """Accumulate start time of each chapters in msec"""
-        lengths = [clip.ch.length.to_msec() for clip in self.clips]
+        lengths = [int(clip.ch.length.total_seconds() * 1000) for clip in self.clips]
         starts = [0]
         for i in lengths:
             starts.append(starts[-1] + i)
@@ -161,10 +143,16 @@ class Clips:
     def title(self) -> str:
         if len(self.clips) <= 0:
             return ""
+        c0 = self.clips[0].ch
+        cn = self.clips[-1].ch
+        c0_date = c0.date.strftime("%Y.%m.%d")
+        c0_time = (datetime.min + c0.time).time().strftime("%H.%M.%S")
+        cn_date = cn.date.strftime("%Y.%m.%d")
+        cn_time = (datetime.min + cn.time).time().strftime("%H.%M.%S")
         title = (
-            f"{self.clips[0].ch.name} "
-            f"{self.clips[0].ch.date}-{self.clips[0].ch.time} "
-            f"{self.clips[-1].ch.date}-{self.clips[-1].ch.time}"
+            f"{c0.name} "
+            f"{c0_date}-{c0_time} "
+            f"{cn_date}-{cn_time}"
         )
         return title
 
@@ -212,8 +200,8 @@ class Pattern(ABC):
 @dataclass
 class ClipInfo:
     name: str
-    date: str
-    time: str
+    date: datetime
+    time: timedelta
     index: str = ""
 
 
@@ -241,18 +229,35 @@ class Basic(Pattern):
             start, end, *_ = re.split(self.cut_pattern(), s)[1:]
             _, *start, _ = re.split(self.time_pattern(), start)
             _, *end, _ = re.split(self.time_pattern(), end)
-            cut = Cut(start=Time(*start), end=Time(*end))
+            start_ints = [int(x) for x in start]
+            end_ints = [int(x) for x in end]
+            cut_start = timedelta(
+                hours=start_ints[0],
+                minutes=start_ints[1],
+                seconds=start_ints[2],
+                milliseconds=start_ints[3]
+            )
+            cut_end = timedelta(
+                hours=end_ints[0],
+                minutes=end_ints[1],
+                seconds=end_ints[2],
+                milliseconds=end_ints[3]
+            )
+            cut = Cut(start=cut_start, end=cut_end)
         return cut
 
-    def parse(self, inpt: str) -> ClipInfo:
-        name, date, time, index, DVR, mp4, rest = re.split(self.re(), inpt)[1:]
+    def parse(self, inpt: str) -> Tuple[ClipInfo, Optional[Cut]]:
+        name, date_str, time_str, index, DVR, mp4, rest = re.split(self.re(), inpt)[1:]
+        dt_obj = datetime.strptime(f"{date_str} {time_str}", "%Y.%m.%d %H.%M.%S")
+        date_val = datetime(dt_obj.year, dt_obj.month, dt_obj.day)
+        time_val = timedelta(hours=dt_obj.hour, minutes=dt_obj.minute, seconds=dt_obj.second)
         clip = ClipInfo(
             name=name,
-            date=date,
-            time=time,
+            date=date_val,
+            time=time_val,
             index=index,
         )
-        cut = ""
+        cut = None
         if rest:
             cut = self.parse_cut(s=rest)
         return clip, cut
@@ -369,7 +374,7 @@ class Parser:
             name=clip_info.name,
             date=clip_info.date,
             time=clip_info.time,
-            length=Time().from_sec(length),
+            length=timedelta(seconds=length),
             index=clip_info.index,
             cut=cut,
             comment="" if comment is None else comment,
@@ -550,9 +555,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         prog="VideoConcat",
         description=(
-            "Produce chapter metadata/text from video names produced "
-            "combination of shadowplay and losslesscut",
+            "Produce chapter metadata and text from video filenames "
+            "generated by Shadowplay and processed by LosslessCut. "
+            "This script helps in creating chapter information for video files."
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "-s",
@@ -560,26 +567,36 @@ if __name__ == "__main__":
         action="store_true",
         help="Don't read files under base during setup",
     )
-    parser.add_argument("-b", "--base", action="store")
-    parser.add_argument("-o", "--out_dir", action="store")
+    parser.add_argument(
+        "-b",
+        "--base",
+        action="store",
+        help="The base directory containing input video files.",
+    )
+    parser.add_argument(
+        "-o",
+        "--out_dir",
+        action="store",
+        help="The directory to save output files.",
+    )
     parser.add_argument(
         "-c",
         "--compress",
         action="store_true",
-        help="Compress flag that enables hevc_nvenc",
+        help="Enable HEVC NVENC compression.",
     )
     parser.add_argument(
         "--bitrate",
         action="store",
         default=4,
-        help="Compression bitrate",
+        help="Compression bitrate (default: 4).",
     )
     parser.add_argument(
         "-m",
         "--move",
         action="store_true",
         default=False,
-        help="If specified, move videos and start processing",
+        help="If specified, move videos and start processing.",
     )
     parser.add_argument(
         "-cf",
