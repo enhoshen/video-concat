@@ -51,6 +51,11 @@ class NoHr(TimeToText):
         return f"{min:02}:{sec:02}"
 
 
+class DateTimeSec(TimeToText):
+    def text(self, time: timedelta) -> str:
+        return time.strftime("%m.%d-%H.%M.%S")
+
+
 @dataclass
 class Cut:
     start: timedelta
@@ -75,6 +80,7 @@ class Chapter:
 
     def __post_init__(self):
         self.yt_timestamp = YoutubeTimestamp()
+        self.datetime_fmt = DateTimeSec()
 
     def to_text(self, start: int) -> str:
         """
@@ -87,7 +93,7 @@ class Chapter:
         cut = self.cut
         cut_start = cut.start if cut is not None else timedelta(0)
         date_start = self.date + self.time + cut_start
-        date_time_str = date_start.strftime("%m.%d-%H.%M.%S")
+        date_time_str = self.datetime_fmt.text(date_start)
         date_start_str = date_time_str
         s = f"{self.yt_timestamp.text(start_td)} {date_start_str}"
         if self.comment != "":
