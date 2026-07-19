@@ -160,11 +160,11 @@ def test_datetime_crossing_boundaries():
 
 def test_yaml_comment_parser(tmp_path):
     comment_yaml = """
-- 123:
+123:
   - comment 1
   - comment 2
-- 456:  comment
-- 689:
+456:  comment
+689:
   - comment a
   - comment b
 """
