@@ -5,6 +5,7 @@
 from path import Path
 from datetime import datetime, timedelta
 import script
+from unittest.mock import patch
 
 
 class TestParse:
@@ -155,3 +156,48 @@ def test_datetime_crossing_boundaries():
     # strftime("%m.%d-%H.%M.%S") -> "01.01-00.00.05"
     assert "01.01-00.00.05" in text_out2
     assert text_out2.startswith("00:00:00")
+
+
+def test_yaml_comment_parser(tmp_path):
+    comment_yaml = """
+- 123
+  - comment 1
+  - comment 2
+- 456:  comment
+- 689
+  - comment a
+  - comment b
+"""
+    yaml_file = tmp_path / "comments.yaml"
+    yaml_file.write_text(comment_yaml)
+
+    parser = script.CommentParser()
+    comments = parser.parse(str(yaml_file))
+
+    assert comments == {
+        "123": ["comment 1", "comment 2"],
+        "456": "comment",
+        "689": ["comment a", "comment b"],
+    }
+
+
+@patch("ffmpeg.probe")
+def test_parser_sub_indexing(mock_probe):
+    mock_probe.return_value = {"format": {"duration": "120.0"}}
+
+    # Create mock clip paths
+    f1 = Path(
+        "/abc/Abiotic Factor 2026.07.11 - 15.56.26.689.DVR.mp4-00.00.08.352-00.00.47.889.mp4"
+    )
+    f2 = Path(
+        "/abc/Abiotic Factor 2026.07.11 - 15.56.26.689.DVR.mp4-00.01.53.352-00.02.30.889.mp4"
+    )
+
+    comment_map = {"689": ["comment a", "comment b"]}
+
+    parser = script.Parser()
+    clips = parser.clips([f1, f2], comment_map=comment_map)
+
+    assert len(clips.clips) == 2
+    assert clips.clips[0].ch.comment == "comment a"
+    assert clips.clips[1].ch.comment == "comment b"

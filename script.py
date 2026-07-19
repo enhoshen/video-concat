@@ -13,6 +13,7 @@ from datetime import datetime, date, time, timedelta
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 import ffmpeg
+import yaml
 
 
 logger = logging.getLogger()
@@ -296,6 +297,43 @@ def temporary_pattern(self) -> str:
     return rf"{name} {date}   {time}"
 
 
+class CommentParser:
+    def parse(self, file_path: str) -> Dict[str, Union[str, List[str]]]:
+        """Reads comments from a YAML file and returns a dictionary mapping index to comment(s)."""
+        comments: Dict[str, Union[str, List[str]]] = {}
+        if not file_path:
+            return comments
+        try:
+            with open(file_path, "r") as f:
+                content = f.read()
+
+            # Preprocess to add colons for list-like indexes if they are missing
+            # Matches "- 123" followed by a newline and an indented list item "- "
+            content_fixed = re.sub(r"(^\s*-\s+\d+)\s*\n(?=\s+-)", r"\1:\n", content, flags=re.MULTILINE)
+
+            data = yaml.safe_load(content_fixed)
+            if data is None:
+                return comments
+
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    comments[str(k)] = v
+            elif isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict):
+                        for k, v in item.items():
+                            comments[str(k)] = v
+                    else:
+                        logger.warning(f"Unexpected item type in comment file: {item}")
+            else:
+                logger.warning(f"Unexpected root type in comment file: {type(data)}")
+        except FileNotFoundError:
+            logger.error(f"Comment file not found: {file_path}")
+        except Exception as e:
+            logger.error(f"Error reading comment file {file_path}: {e}")
+        return comments
+
+
 class Parser:
     """
     Parse file name produced by shadowplayer recording and lossless cut
@@ -306,6 +344,7 @@ class Parser:
 
     def __init__(self) -> None:
         self.patterns = [Basic()]
+        self._index_counters = {}
 
     def files(self, base: path.Path):
         files = base.listdir()
@@ -313,36 +352,14 @@ class Parser:
         return files
 
     def clips(
-        self, files: List[path.Path], comment_map: dict[str, str]
+        self, files: List[path.Path], comment_map: Dict[str, Union[str, List[str]]]
     ) -> Clips:
+        self._index_counters = {}
         clips = [
             self.parse(file=file, comment_map=comment_map) for file in files
         ]
         clips = [clip for clip in clips if clip is not None]
         return Clips(clips)
-
-    def comments(self, file_path: str) -> dict[str, str]:
-        """Reads comments from a file and returns a dictionary mapping index to comment."""
-        comments = {}
-        try:
-            with open(file_path, "r") as f:
-                for line in f:
-                    parts = line.strip().split(maxsplit=1)
-                    if len(parts) == 2:
-                        index, comment = parts
-                        # Ensure index is treated as string for consistency with ClipInfo.index
-                        comments[str(index)] = comment
-                    elif (
-                        len(parts) == 1 and parts[0]
-                    ):  # Handle case where there's only an index
-                        logger.warning(
-                            f"Line in comment file '{file_path}' has an index but no comment: '{line.strip()}'"
-                        )
-        except FileNotFoundError:
-            logger.error(f"Comment file not found: {file_path}")
-        except Exception as e:
-            logger.error(f"Error reading comment file {file_path}: {e}")
-        return comments
 
     def parse_info(
         self,
@@ -363,7 +380,7 @@ class Parser:
         return clip_info, cut
 
     def parse(
-        self, file: path.Path, comment_map: Optional[Dict[str, str]] = None
+        self, file: path.Path, comment_map: Optional[Dict[str, Union[str, List[str]]]] = None
     ) -> Optional[Clip]:
         """Parse file name to Clip"""
         # discard first element which is an empty string
@@ -375,11 +392,25 @@ class Parser:
 
         # length is in sec
         length: float = float(probe["format"]["duration"])
-        comment = (
-            comment_map.get(clip_info.index)
-            if comment_map is not None
-            else None
-        )
+        
+        comment = ""
+        if comment_map is not None:
+            if not hasattr(self, "_index_counters"):
+                self._index_counters = {}
+            sub_index = self._index_counters.get(clip_info.index, 0)
+            self._index_counters[clip_info.index] = sub_index + 1
+            
+            val = comment_map.get(clip_info.index)
+            if isinstance(val, list):
+                if sub_index < len(val):
+                    comment = val[sub_index]
+            elif isinstance(val, str):
+                if sub_index == 0:
+                    comment = val
+            elif val is not None:
+                if sub_index == 0:
+                    comment = str(val)
+
         chapter = Chapter(
             name=clip_info.name,
             date=clip_info.date,
@@ -387,7 +418,7 @@ class Parser:
             length=timedelta(seconds=length),
             index=clip_info.index,
             cut=cut,
-            comment="" if comment is None else comment,
+            comment=comment,
         )
         clip = Clip(path=file, probe=probe, ch=chapter)
         return clip
@@ -528,7 +559,7 @@ class Interactive:
             base = self.args.base
 
         files = parser.files(path.Path(base))
-        comment_map: dict[str, str] = parser.comments(
+        comment_map: Dict[str, Union[str, List[str]]] = CommentParser().parse(
             file_path=self.args.comment_file
         )
         clips = parser.clips(files=files, comment_map=comment_map)
@@ -612,7 +643,7 @@ if __name__ == "__main__":
         "-cf",
         "--comment-file",
         action="store",
-        help="Path to the comment file, where each line is '<index> <comment>'",
+        help="Path to the YAML comment file.",
     )
     args = parser.parse_args()
     interactive = Interactive(args)
