@@ -4,13 +4,13 @@
 
 from path import Path
 from datetime import datetime, timedelta
-import script
+from video_concat import lib
 from unittest.mock import patch
 
 
 class TestParse:
     def test_names(self):
-        dut = script.Parser()
+        dut = lib.Parser()
         f1 = Path("/abc/cde/Project Zomboid 2025.07.13 - 02.09.03.696.DVR.mp4")
         f2 = Path(
             "/abc/cde/Project Zomboid 2025.07.13 - 03.39.22.704.DVR.mp4-00.00.23.029-00.00.31.281.mp4"
@@ -35,7 +35,7 @@ class TestParse:
 
 
 def test_basic_parse_from_input_file():
-    basic = script.Basic()
+    basic = lib.Basic()
     with open("tests/input.txt", "r") as f:
         lines = [line.strip() for line in f if line.strip()]
 
@@ -59,11 +59,11 @@ def test_basic_parse_from_input_file():
 
 
 def test_chapter_to_text():
-    basic = script.Basic()
+    basic = lib.Basic()
     line1 = "Abiotic Factor 2026.07.11 - 15.56.26.689.DVR.mp4-00.00.08.352-00.00.47.889.mp4"
     clip_info1, cut1 = basic.parse(line1)
 
-    chapter1 = script.Chapter(
+    chapter1 = lib.Chapter(
         name=clip_info1.name,
         date=clip_info1.date,
         time=clip_info1.time,
@@ -84,7 +84,7 @@ def test_chapter_to_text():
 
     line2 = "Abiotic Factor 2026.07.11 - 15.58.26.690.DVR.mp4"
     clip_info2, cut2 = basic.parse(line2)
-    chapter2 = script.Chapter(
+    chapter2 = lib.Chapter(
         name=clip_info2.name,
         date=clip_info2.date,
         time=clip_info2.time,
@@ -103,7 +103,7 @@ def test_chapter_to_text():
 
 
 def test_datetime_crossing_boundaries():
-    basic = script.Basic()
+    basic = lib.Basic()
 
     # 1. Crossing Day and Month: July 31st 23:59:55 + 10s (cut.start)
     # This should cross midnight and result in August 1st, 00:00:05
@@ -115,7 +115,7 @@ def test_datetime_crossing_boundaries():
     assert cut1 is not None
     assert cut1.start == timedelta(seconds=10)
 
-    chapter1 = script.Chapter(
+    chapter1 = lib.Chapter(
         name=clip_info1.name,
         date=clip_info1.date,
         time=clip_info1.time,
@@ -141,7 +141,7 @@ def test_datetime_crossing_boundaries():
     assert cut2 is not None
     assert cut2.start == timedelta(seconds=10)
 
-    chapter2 = script.Chapter(
+    chapter2 = lib.Chapter(
         name=clip_info2.name,
         date=clip_info2.date,
         time=clip_info2.time,
@@ -171,7 +171,7 @@ def test_yaml_comment_parser(tmp_path):
     yaml_file = tmp_path / "comments.yaml"
     yaml_file.write_text(comment_yaml)
 
-    parser = script.CommentParser()
+    parser = lib.CommentParser()
     comments = parser.parse(str(yaml_file))
 
     assert comments == {
@@ -195,7 +195,7 @@ def test_parser_sub_indexing(mock_probe):
 
     comment_map = {"689": ["comment a", "comment b"]}
 
-    parser = script.Parser()
+    parser = lib.Parser()
     clips = parser.clips([f1, f2], comment_map=comment_map)
 
     assert len(clips.clips) == 2
