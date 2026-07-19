@@ -1,3 +1,5 @@
 ffmpeg
 jinja2
 path
+yaml
+git+https://github.com/enhoshen/argparseui
