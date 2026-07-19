@@ -307,11 +307,7 @@ class CommentParser:
             with open(file_path, "r") as f:
                 content = f.read()
 
-            # Preprocess to add colons for list-like indexes if they are missing
-            # Matches "- 123" followed by a newline and an indented list item "- "
-            content_fixed = re.sub(r"(^\s*-\s+\d+)\s*\n(?=\s+-)", r"\1:\n", content, flags=re.MULTILINE)
-
-            data = yaml.safe_load(content_fixed)
+            data = yaml.safe_load(content)
             if data is None:
                 return comments
 
@@ -324,9 +320,13 @@ class CommentParser:
                         for k, v in item.items():
                             comments[str(k)] = v
                     else:
-                        logger.warning(f"Unexpected item type in comment file: {item}")
+                        logger.warning(
+                            f"Unexpected item type in comment file: {item}"
+                        )
             else:
-                logger.warning(f"Unexpected root type in comment file: {type(data)}")
+                logger.warning(
+                    f"Unexpected root type in comment file: {type(data)}"
+                )
         except FileNotFoundError:
             logger.error(f"Comment file not found: {file_path}")
         except Exception as e:
@@ -352,7 +352,9 @@ class Parser:
         return files
 
     def clips(
-        self, files: List[path.Path], comment_map: Dict[str, Union[str, List[str]]]
+        self,
+        files: List[path.Path],
+        comment_map: Dict[str, Union[str, List[str]]],
     ) -> Clips:
         self._index_counters = {}
         clips = [
@@ -380,7 +382,9 @@ class Parser:
         return clip_info, cut
 
     def parse(
-        self, file: path.Path, comment_map: Optional[Dict[str, Union[str, List[str]]]] = None
+        self,
+        file: path.Path,
+        comment_map: Optional[Dict[str, Union[str, List[str]]]] = None,
     ) -> Optional[Clip]:
         """Parse file name to Clip"""
         # discard first element which is an empty string
@@ -392,14 +396,14 @@ class Parser:
 
         # length is in sec
         length: float = float(probe["format"]["duration"])
-        
+
         comment = ""
         if comment_map is not None:
             if not hasattr(self, "_index_counters"):
                 self._index_counters = {}
             sub_index = self._index_counters.get(clip_info.index, 0)
             self._index_counters[clip_info.index] = sub_index + 1
-            
+
             val = comment_map.get(clip_info.index)
             if isinstance(val, list):
                 if sub_index < len(val):
