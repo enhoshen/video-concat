@@ -167,6 +167,9 @@ def test_yaml_comment_parser(tmp_path):
 689:
   - comment a
   - comment b
+666:
+  2: comment c
+  4: comment d
 """
     yaml_file = tmp_path / "comments.yaml"
     yaml_file.write_text(comment_yaml)
@@ -178,6 +181,7 @@ def test_yaml_comment_parser(tmp_path):
         "123": ["comment 1", "comment 2"],
         "456": "comment",
         "689": ["comment a", "comment b"],
+        "666": {2: "comment c", 4: "comment d"},
     }
 
 
@@ -200,4 +204,11 @@ def test_parser_sub_indexing(mock_probe):
 
     assert len(clips.clips) == 2
     assert clips.clips[0].ch.comment == "comment a"
+    assert clips.clips[1].ch.comment == "comment b"
+
+    # dict sub comments support
+    comment_map = {"689": {1: "comment b"}}
+    clips = parser.clips([f1, f2], comment_map=comment_map)
+    assert len(clips.clips) == 2
+    assert clips.clips[0].ch.comment == ""
     assert clips.clips[1].ch.comment == "comment b"

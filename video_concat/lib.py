@@ -411,6 +411,10 @@ class Parser:
             elif isinstance(val, str):
                 if sub_index == 0:
                     comment = val
+            elif isinstance(val, dict):
+                vv = val.get(sub_index)
+                if vv is not None:
+                    comment = vv
             elif val is not None:
                 if sub_index == 0:
                     comment = str(val)
